@@ -1,0 +1,25 @@
+[build-system]
+requires = [
+    "cmake",
+    "ninja",
+    "scikit-build",
+    "setuptools<66.0.0", # https://github.com/pypa/setuptools/issues/3772
+]
+build-backend = "setuptools.build_meta"
+
+[tool.black]
+line-length = 100
+
+[tool.isort]
+profile = "black"
+
+[tool.pylint.format]
+max-line-length = "100"
+
+[tool.cibuildwheel]
+archs = ["auto64"]
+skip = ["*-musllinux*",  "pp*"]
+
+[tool.cibuildwheel.macos]
+environment = "MACOSX_DEPLOYMENT_TARGET=10.14"
+archs = ["auto64", "arm64"]
