@@ -1,25 +1,3 @@
-// MIT License
-//
-// Copyright (c) 2022 Ignacio Vizzo, Tiziano Guadagnino, Benedikt Mersch, Cyrill
-// Stachniss.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in all
-// copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-// SOFTWARE.
 #pragma once
 
 // KISS-ICP
@@ -32,9 +10,14 @@
 #include "sensor_msgs/msg/point_cloud2.hpp"
 #include "tf2_ros/transform_broadcaster.h"
 
-// For the EKF2D filter
-#include <Eigen/Dense>
+// Eigen & Sophus
+#include <Eigen/Core>
+#include <Eigen/Geometry>
+#include <sophus/se3.hpp>
 #include <cmath>
+#include <deque>
+
+namespace kiss_icp_ros {
 
 //
 // Simple 2D EKF class (state: [x, y, theta])
@@ -44,26 +27,26 @@ class EKF2D
 public:
   EKF2D()
   {
-    state_.setZero(); // [x=0, y=0, theta=0]
+    state_.setZero(); // 초기 상태: [0, 0, 0]
     P_.setIdentity();
     P_ *= 1.0;
 
     // Process noise Q
     Q_.setZero();
-    Q_(0,0) = 0.01;
-    Q_(1,1) = 0.01;
-    Q_(2,2) = 0.001;
+    Q_(0,0) = 0.01 / 100.0;
+    Q_(1,1) = 0.01 / 100.0;
+    Q_(2,2) = 0.01 / 100.0;
 
     // Measurement noise R
     R_.setZero();
-    R_(0,0) = 0.05;
-    R_(1,1) = 0.05;
-    R_(2,2) = 0.01;
+    R_(0,0) = 0.02;
+    R_(1,1) = 0.02;
+    R_(2,2) = 0.02;
   }
 
   Eigen::Vector3d getState() const { return state_; }
 
-  // Predict step: integrates wheel odometry (v: linear, w: angular, dt: time interval)
+  // Predict step: integrate wheel odometry (v: linear, w: angular, dt: time interval)
   void predict(double v, double w, double dt)
   {
     double x = state_(0);
@@ -84,7 +67,7 @@ public:
     P_ = F * P_ * F.transpose() + Q_;
   }
 
-  // Update step: fuses a measurement (x, y, theta)
+  // Update step: fuse a measurement (x, y, theta)
   void update(double x_meas, double y_meas, double theta_meas)
   {
     Eigen::Matrix3d H = Eigen::Matrix3d::Identity();
@@ -105,52 +88,50 @@ private:
   Eigen::Matrix3d R_;
 };
 
-namespace kiss_icp_ros {
-
 class OdometryServer : public rclcpp::Node {
 public:
-    /// OdometryServer constructor
+    /// Constructor.
     OdometryServer();
 
 private:
-    /// Register new frame (LiDAR callback)
-    void RegisterFrame(const sensor_msgs::msg::PointCloud2::SharedPtr msg_ptr);
-    /// Wheel odometry callback
-    void WheelOdometryCallback(const nav_msgs::msg::Odometry::SharedPtr msg);
+    /// LiDAR callback: perform ICP registration and EKF update.
+    void lidarCallback(const sensor_msgs::msg::PointCloud2::SharedPtr msg);
+    /// Wheel odometry callback: perform EKF prediction.
+    void wheelOdometryCallback(const nav_msgs::msg::Odometry::SharedPtr msg);
 
 private:
-    /// ROS node settings
+    // ROS node settings.
     size_t queue_size_{1};
 
-    /// Tools for broadcasting TFs.
+    // TF broadcaster.
     std::unique_ptr<tf2_ros::TransformBroadcaster> tf_broadcaster_;
 
-    /// Data subscribers.
-    rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr pointcloud_sub_;
+    // Subscribers.
+    rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr lidar_sub_;
     rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr wheel_odom_sub_;
 
-    /// Data publishers.
+    // Publishers.
     rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr odom_publisher_;
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr frame_publisher_;
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr kpoints_publisher_;
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr map_publisher_;
 
-    /// Path publisher.
+    // Path publisher.
     nav_msgs::msg::Path path_msg_;
     rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr traj_publisher_;
 
-    /// KISS-ICP pipeline and configuration.
+    // KISS-ICP pipeline and configuration.
     kiss_icp::pipeline::KissICP odometry_;
     kiss_icp::pipeline::KISSConfig config_;
 
-    /// Global / map coordinate frames.
-    std::string odom_frame_{"odom"};
-    std::string child_frame_{"base_link"};
+    // Global / map coordinate frames.
+    std::string odom_frame_{"odom_LW"};
+    std::string child_frame_{"base_link_LW"};
 
-    // =======================================================================
-    // New members for the 2D EKF filter.
-    // =======================================================================
+    // EKF filter for 2D state.
     EKF2D ekf2d_;
+
+    // Last wheel odometry timestamp.
     rclcpp::Time last_wheel_stamp_;
 };
 
